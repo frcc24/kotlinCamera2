@@ -5,32 +5,40 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
-import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
+import android.media.MediaRecorder
+import android.os.*
 import android.util.Log
 import android.view.*
+import androidx.annotation.RequiresApi
 import androidx.fragment.app.Fragment
-import androidx.navigation.fragment.findNavController
 import br.com.cameraapi.databinding.FragmentFirstBinding
 import pub.devrel.easypermissions.AfterPermissionGranted
 import pub.devrel.easypermissions.EasyPermissions
-import java.lang.IllegalArgumentException
+import java.io.File
+import java.lang.Exception
+import java.lang.IllegalStateException
+import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.collections.ArrayList
 
 
 const val REQUEST_CAMERA_PERMISSION = 100
 
 class FirstFragment : Fragment() {
 
-    private val MAX_PREVIEW_WIDTH = 1000;
-    private val MAX_PREVIEW_HEIGHT = 1000;
+    private val MAX_PREVIEW_WIDTH = 1000
+    private val MAX_PREVIEW_HEIGHT = 1000
+    private var isRecording = false
+    val mediaRecorder by lazy {  MediaRecorder() }
+    private lateinit var currentVideoFilePath: String
+
 
     private lateinit var captureSession: CameraCaptureSession
     private lateinit var captureRequestBuilder: CaptureRequest.Builder
 
     private lateinit var cameraDevice: CameraDevice
     private val deviceStateCall = object: CameraDevice.StateCallback(){
+        @RequiresApi(Build.VERSION_CODES.O)
         override fun onOpened(camera: CameraDevice) {
             if (camera != null){
                 cameraDevice = camera
@@ -54,30 +62,78 @@ class FirstFragment : Fragment() {
         activity?.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
 
+    private fun createFileName(): String{
+        val timestamp = SimpleDateFormat( "ddMMyyyy_HHmm").format(Date())
+        return "Video_${timestamp}.mp4"
+    }
+
+    private fun createVideoFile(): File {
+        val videoFile = File(context?.filesDir, createFileName())
+        currentVideoFilePath = videoFile.absolutePath
+        return videoFile
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun setupMediaRecorder( ) {
+        mediaRecorder.apply {
+            setVideoSource(MediaRecorder.VideoSource.SURFACE)
+            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            setOutputFile(createVideoFile())
+            setVideoEncodingBitRate(10000000)
+            setVideoFrameRate(30)
+            setVideoSize(1000,1000)
+            setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+            prepare()
+        }
+        //mediaRecorder.prepare()
+    }
+    fun stopMediaRecorder(){
+        mediaRecorder.apply {
+            try {
+                stop()
+                reset()
+            }catch (e: Exception){
+                Log.d("tag", e.toString())
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun previewSession(){
+
+        setupMediaRecorder()
+
         val surfaceTexture = binding.cameraView.surfaceTexture
         if (surfaceTexture != null) {
             surfaceTexture.setDefaultBufferSize(MAX_PREVIEW_WIDTH, MAX_PREVIEW_HEIGHT)
             val surface = Surface(surfaceTexture)
+            val recordingSurface = mediaRecorder.surface
 
-            captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
             captureRequestBuilder.addTarget(surface)
+            captureRequestBuilder.addTarget(recordingSurface)
 
-            cameraDevice.createCaptureSession(listOf(surface), object: CameraCaptureSession.StateCallback(){
+            val surfaces = ArrayList<Surface>().apply {
+                add(surface)
+                add(recordingSurface)
+            }
+
+            cameraDevice.createCaptureSession(surfaces, object: CameraCaptureSession.StateCallback(){
                 override fun onConfigured(session: CameraCaptureSession) {
                     if( session != null){
                         captureSession = session
                         captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                         captureSession.setRepeatingRequest(captureRequestBuilder.build(), null, null)
-
+                        isRecording = true
+                        mediaRecorder.start()
                     }
                 }
 
-                override fun onConfigureFailed(p0: CameraCaptureSession) {
-                    Log.d("tag", "creatig capture session failed")
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.d("tag", "creatig capture session failed: ${session.device.id}")
                 }
 
-            }, null)
+            }, backgroudHandler)
         }
     }
 
@@ -222,7 +278,7 @@ class FirstFragment : Fragment() {
         //binding.cameraView
 
         binding.buttonFirst.setOnClickListener {
-            findNavController().navigate(R.id.action_FirstFragment_to_SecondFragment)
+            stopMediaRecorder()
         }
     }
 
